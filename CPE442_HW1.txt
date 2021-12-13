@@ -1,0 +1,211 @@
+--Leonid Maksymenko 10452839
+--Problem 1
+
+with minmax_temp1 as (
+    select cust, prod, min(quant), max(quant)
+    from sales
+    group by cust, prod
+),
+
+minmax_temp2 as (
+    select cust, min(min), max(max)
+    from minmax_temp1
+    group by cust
+),
+
+det_min as (
+    select s.cust, prod as min_prod,
+        mt.min as min_q, date as min_date, state
+    from minmax_temp2 as mt
+    join sales as s on mt.cust = s.cust and
+                        mt.min = s.quant
+),
+
+det_max as (
+        select s.cust, prod as max_prod,
+        mt.max as max_q, date as max_date, state
+    from minmax_temp2 as mt
+    join sales as s on mt.cust = s.cust and
+                        mt.max = s.quant
+),
+
+avg_temp as (
+    select cust, round(avg(quant)) as avg_q
+    from sales
+    group by cust
+)
+
+select mi.cust as customer, min_q, min_prod, min_date, mi.state as st,
+    max_q, max_prod, max_date, ma.state as st, avg_q
+from det_min as mi
+join det_max as ma on mi.cust = ma.cust
+join avg_temp on mi.cust = avg_temp.cust
+--we have some duplicate values, that cannot be avoided since we are looking at
+--individual transactions and they have many smallest transactions
+
+
+--Problem 2
+
+--warning, terribly slow
+with octmax as (
+    select cust, prod, max(quant) as oct_max
+    from sales
+    where year > 2017 and month = 10
+    group by cust, prod
+),
+
+octdate as (
+    select s.cust, s.prod, s.date as oct_date, oct_max
+    from sales as s
+    join octmax as om on om.oct_max = s.quant and om.cust = s.cust and om.prod = s.prod
+),
+
+novmin as (
+    select s.cust, s.prod, min(quant) as nov_min
+    from sales as s
+    where s.month = 11
+    group by s.cust, s.prod
+),
+
+novdate as (
+    select s.cust, s.prod, s.date as nov_date, nov_min
+    from sales as s
+    join novmin as om on om.nov_min = s.quant and om.cust = s.cust and om.prod = s.prod
+),
+
+decmin as (
+    select s.cust, s.prod, min(quant) as dec_min
+    from sales as s
+    where s.month = 12
+    group by s.cust, s.prod
+),
+
+decdate as (
+    select s.cust, s.prod, s.date as dec_date, dec_min
+    from sales as s
+    join decmin as om on om.dec_min = s.quant and om.cust = s.cust and om.prod = s.prod
+)
+
+select cust as customer, prod as product,
+    oct_max, oct_date, nov_min, nov_date, dec_min, dec_date
+from octmax
+natural join octdate
+natural join novmin
+natural join novdate
+natural join decmin
+natural join decdate
+
+
+--Problem 3
+with monthly as  (
+    select prod, month, sum(quant)
+    from sales
+    group by prod, month
+),
+
+minmax as (
+    select month, max(sum), min(sum)
+    from monthly
+    group by month
+),
+
+mostpop as (
+    select monthly.month, prod as most_pop_prod, max as most_pop_total_q
+    from monthly, minmax
+    where monthly.month = minmax.month
+        and monthly.sum = minmax.max
+
+),
+
+leastpop as (
+    select monthly.month, prod as least_pop_prod, min as least_pop_total_q
+    from monthly, minmax
+    where monthly.month = minmax.month
+        and monthly.sum = minmax.min         
+)
+
+select mostpop.month, most_pop_prod, most_pop_total_q, least_pop_prod, least_pop_total_q
+from mostpop
+join leastpop on mostpop.month = leastpop.month
+
+
+--Problem 4
+with monthprodsum as (
+	select prod, month, sum(quant)
+	from sales
+	group by prod, month
+),
+
+monthminmax as (
+    select prod, month, min("sum"), max("sum")
+    from monthprodsum
+    group by prod, month
+),
+
+prodmaxmin as (
+	select prod, max("max"), min("min")
+	from monthminmax
+	group by prod
+),
+
+prodmax as (
+	select prodmaxmin.prod, month as MOST_FAV_MONTH
+	from prodmaxmin, monthminmax
+	where prodmaxmin.max = monthminmax.max
+		and prodmaxmin.prod = monthminmax.prod
+),
+
+prodmin as (
+	select prodmaxmin.prod, month as LEAST_FAV_MONTH
+	from prodmaxmin, monthminmax
+	where prodmaxmin.min = monthminmax.min
+		and prodmaxmin.prod = monthminmax.prod
+)
+
+select prodmax.prod as PRODUCT, MOST_FAV_MONTH, LEAST_FAV_MONTH
+from prodmax
+join prodmin on prodmax.prod = prodmin.prod
+
+
+--Problem 5
+--average per product per state
+with state_data as(
+    select prod, cust, state, avg(quant)
+    from sales
+    where sales.year between 2016 and 2020
+    group by state, prod, cust
+),
+--turn each state into a column
+temp_col as(
+    select prod, cust,
+        (CASE WHEN state = 'CT' THEN avg END) AS ct_avg,
+        (CASE WHEN state = 'NY' THEN avg END) AS ny_avg,
+        (CASE WHEN state = 'PA' THEN avg END) AS pa_avg,
+		(CASE WHEN state = 'NJ' THEN avg END) AS nj_avg
+    from state_data
+),
+--merge column rows
+state_avg as (
+    select prod, cust,
+        round(max(ct_avg)) as ct_avg,
+        round(max(ny_avg)) as ny_avg,
+        round(max(pa_avg)) as pa_avg,
+		round(max(nj_avg)) as nj_avg
+    from temp_col
+    group by prod, cust
+),
+--average and sum and count for products
+totals as (
+    select prod, cust, avg(quant), sum(quant), count(*)
+    from sales
+    where sales.year between 2016 and 2020
+    group by prod, cust
+)
+
+select prod as product, cust as customer,
+    ct_avg, ny_avg, pa_avg, nj_avg, round(avg) as average,
+    sum as total, count
+from totals
+natural join state_avg
+
+

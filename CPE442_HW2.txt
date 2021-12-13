@@ -1,0 +1,144 @@
+--Leonid Maksymenko
+
+
+-- #1
+
+-- to use, remove the first with as (its for testing on a shrunken version of sales)
+with sales as (
+	select *
+	from (
+		  select s.*,
+				 count(prod) over (order by (select NULL)) as cnt,
+				 row_number() over (order by (select NULL)) as rn
+		  from sales as s
+	) as s
+	where rn::float / cnt <= 0.05
+),
+--add with here, query starts here
+s1 as (
+	select cust, prod, month, state, round(avg(quant)) as cust_avg
+	from sales
+	group by cust, prod, month, state
+),
+
+pd as (
+	select s1.cust, s1.prod, s1.month, s1.state, round(avg(quant)) as other_prod_avg
+	from s1, sales as s
+	where s1.state = s.state and
+			s1.cust = s.cust and
+			s1.prod != s.prod and
+			s1.month = s.month
+	group by s1.cust, s1.prod, s1.month, s1.state
+),
+
+mo as (
+	select s1.cust, s1.prod, s1.month, s1.state, round(avg(quant)) as other_month_avg
+	from s1, sales as s
+	where s1.state = s.state and
+			s1.cust = s.cust and
+			s1.prod = s.prod and
+			s1.month != s.month
+	group by s1.cust, s1.prod, s1.month, s1.state
+),
+
+st as (
+	select s1.cust, s1.prod, s1.month, s1.state, round(avg(quant)) as other_state_avg
+	from s1, sales as s
+	where s1.state != s.state and
+			s1.cust = s.cust and
+			s1.prod = s.prod and
+			s1.month = s.month
+	group by s1.cust, s1.prod, s1.month, s1.state
+)
+
+select s1.*, pd.other_prod_avg, mo.other_month_avg, st.other_state_avg
+from s1
+join pd on s1.state = pd.state and
+			s1.cust = pd.cust and
+			s1.prod = pd.prod and
+			s1.month = pd.month
+join mo on s1.state = mo.state and
+			s1.cust = mo.cust and
+			s1.prod = mo.prod and
+			s1.month = mo.month
+join st on s1.state = st.state and
+			s1.cust = st.cust and
+			s1.prod = st.prod and
+			s1.month = st.month
+-- #2
+
+with quarter_table as (
+	select cust, prod, state, quart, avg(quant) 
+	from (select s.*, EXTRACT(QUARTER from s.date) as quart
+			from sales as s) as s
+	group by cust, prod, state, quart
+)
+
+select q.cust as customer, q.prod as product, q.state as state, 
+		q.quart as Q1, round(l.avg) as before_avg, round(s.avg) as after_avg
+from quarter_table as q
+left join quarter_table as s on
+		q.quart = s.quart - 1 and
+		q.cust = s.cust and
+		q.prod = s.prod and
+		q.state = s.state
+left join quarter_table as l on
+		q.quart = l.quart + 1 and
+		q.cust = l.cust and
+		q.prod = l.prod and
+		q.state = l.state
+
+
+
+
+-- #3
+
+select prod as product, quant as "median quant"
+from(
+	select prod, quant, count(prod) over (partition by prod order by (select NULL)) as cnt,
+					 row_number() over (partition by prod order by quant) as rn
+	from sales
+	order by prod
+	) s
+where rn = (cnt / 2) + 1
+
+
+
+-- #4
+
+--order data in groups by chronological order
+with s2 as (
+	select cust, prod, date, month, quant
+	from sales 
+	order by cust, prod, date
+),
+--calculate sum totals 
+sums as  (
+	select cust, prod, sum(quant) as total
+	from sales 
+	group by cust, prod
+),
+--calculate rolling sums 
+temp1 as (
+	select cust, prod, date, month, quant, sum(quant)
+		over (partition by cust, prod 
+					  rows between unbounded preceding and current row) 
+				as rolling, total
+	from s2
+	natural join sums
+),
+--calculate percent sales distance from 75%
+temp2 as (
+	select cust, prod, date, month, (rolling::float/total) - 0.75 as perc
+	from temp1
+),
+--find the first position where percent passed over 75%
+temp3 as (
+	select cust, prod, date, month, row_number() over(partition by cust, prod ) as rn
+	from temp2
+	where perc > 0 
+)
+
+select cust as customer, prod as product, month as "75% purchase by month"
+from temp3 as t
+where rn = 1
